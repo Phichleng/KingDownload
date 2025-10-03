@@ -1,5 +1,5 @@
 """
-TikTok Video Downloader - Fixed Complete Version
+TikTok Video Downloader - Production Ready Version
 Enhanced with multiple services and better error handling
 """
 
@@ -34,9 +34,24 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'tiktok-fixed-downloader'
-CORS(app, origins=["*"])
-socketio = SocketIO(app, cors_allowed_origins="*", logger=False, engineio_logger=False)
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'tiktok-fixed-downloader-prod')
+
+# Production CORS settings
+if os.environ.get('NODE_ENV') == 'production':
+    CORS(app, origins=[
+        "https://tiktok-downloader-frontend.onrender.com",
+        "https://*.onrender.com",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000"
+    ])
+else:
+    CORS(app, origins=["*"])
+
+socketio = SocketIO(app, 
+                   cors_allowed_origins="*", 
+                   logger=False, 
+                   engineio_logger=False,
+                   async_mode='eventlet')
 
 # Global variables
 active_downloads = {}
@@ -554,6 +569,22 @@ class TikTokVideoExtractor:
 # Initialize extractor
 extractor = TikTokVideoExtractor()
 
+def cleanup_old_downloads():
+    """Remove downloads older than 1 hour"""
+    global active_downloads
+    current_time = datetime.now()
+    old_count = 0
+    
+    for download_id in list(active_downloads.keys()):
+        download = active_downloads[download_id]
+        created_time = datetime.fromisoformat(download['created_at'])
+        if (current_time - created_time).total_seconds() > 3600:  # 1 hour
+            del active_downloads[download_id]
+            old_count += 1
+    
+    if old_count > 0:
+        logger.info(f"Cleaned up {old_count} old downloads")
+
 def perform_streaming(direct_url, video_info, download_id, filename):
     """Core streaming logic with improved error handling"""
     logger.info(f"Streaming from: {direct_url[:100]}...")
@@ -731,6 +762,9 @@ def quick_download():
             'type': 'streaming'
         }
         
+        # Clean up old downloads
+        cleanup_old_downloads()
+        
         return jsonify({
             'download_id': download_id,
             'stream_url': f'/api/stream/{download_id}',
@@ -867,6 +901,9 @@ def get_video_info():
 @app.route('/api/downloads', methods=['GET'])
 def list_downloads():
     """Get list of downloads"""
+    # Clean up old downloads before listing
+    cleanup_old_downloads()
+    
     return jsonify({
         'active_downloads': list(active_downloads.values()),
         'total_active': len(active_downloads)
@@ -892,12 +929,15 @@ def clear_downloads():
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check"""
+    cleanup_old_downloads()
+    
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
         'active_downloads': len(active_downloads),
-        'version': 'enhanced_tiktok_downloader',
-        'services': ['TikMate', 'SnapTik', 'SSSTik', 'TikWM', 'TikFast', 'yt-dlp']
+        'version': 'enhanced_tiktok_downloader_v2',
+        'services': ['TikMate', 'SnapTik', 'SSSTik', 'TikWM', 'TikFast', 'yt-dlp'],
+        'environment': os.environ.get('NODE_ENV', 'development')
     })
 
 # WebSocket handlers
@@ -906,7 +946,8 @@ def handle_connect():
     logger.info(f"Client connected: {request.sid}")
     emit('connected', {
         'message': 'Connected to Enhanced TikTok Downloader',
-        'active_downloads': len(active_downloads)
+        'active_downloads': len(active_downloads),
+        'environment': os.environ.get('NODE_ENV', 'development')
     })
 
 @socketio.on('disconnect')
@@ -915,6 +956,7 @@ def handle_disconnect():
 
 @socketio.on('get_downloads')
 def handle_get_downloads():
+    cleanup_old_downloads()
     emit('downloads_update', {
         'downloads': list(active_downloads.values()),
         'total': len(active_downloads)
@@ -936,13 +978,14 @@ def main():
     print("="*60)
     
     port = int(os.environ.get('PORT', 5000))
-    host = '0.0.0.0'
+    host = os.environ.get('HOST', '0.0.0.0')
     
     print(f"🌐 Server: http://{host}:{port}")
+    print(f"🔧 Environment: {os.environ.get('NODE_ENV', 'development')}")
     print("🚀 Using multiple extraction methods for better success rate...")
     
     # Production configuration
-    debug_mode = os.environ.get('DEBUG', 'False').lower() == 'true'
+    debug_mode = os.environ.get('DEBUG', 'false').lower() == 'true'
     
     try:
         socketio.run(
@@ -950,7 +993,7 @@ def main():
             host=host,
             port=port,
             debug=debug_mode,
-            allow_unsafe_werkzeug=True,
+            allow_unsafe_werkzeug=debug_mode,
             log_output=debug_mode
         )
     except KeyboardInterrupt:
